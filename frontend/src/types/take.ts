@@ -1,3 +1,6 @@
+/** 复核状态：旧数据升级与待对账记录先归入 pending，确认后才并入完成度 */
+export type ReviewStatus = 'pending' | 'confirmed';
+
 /** 一条实拍登记记录（按镜头 + 日期汇总当日张数） */
 export interface TakeLog {
   id?: number;
@@ -15,6 +18,8 @@ export interface TakeLog {
   remainingFrames: number;
   /** 完成百分比 0-100 */
   percent: number;
+  /** 复核状态：pending 待复核（不计入完成度），confirmed 已确认（计入） */
+  reviewStatus: ReviewStatus;
   updatedAt: number;
 }
 
@@ -26,6 +31,7 @@ export const createEmptyTake = (shotId: number, shotCode: string): TakeLog => ({
   wastedFrames: 0,
   remainingFrames: 0,
   percent: 0,
+  reviewStatus: 'confirmed',
   updatedAt: Date.now(),
 });
 

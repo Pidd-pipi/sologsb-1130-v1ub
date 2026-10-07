@@ -4,6 +4,9 @@
  *   v1 建 shots / frames
  *   v2 增加 props 表与 shotId 索引
  *   v3 增加 takes 表，并按实拍张数回填进度
+ *   v4 增加 manifestBatches / planItems（外部排片清单对账）；
+ *      takes 增加 reviewStatus：旧数据一律先按未对账归入待复核，
+ *      完成度只统计 confirmed，确认后才并回。
  */
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
@@ -11,6 +14,7 @@ import type { Shot } from '../types/shot';
 import type { FrameEntry } from '../types/frame';
 import type { PropState } from '../types/prop';
 import type { TakeLog } from '../types/take';
+import type { ManifestBatch, PlanItem } from '../types/manifest';
 
 export const DB_NAME = 'gbstopmotion-db';
 
@@ -32,6 +36,8 @@ export class StopMotionDb extends Dexie {
   frames!: Table<FrameEntry, number>;
   props!: Table<PropState, number>;
   takes!: Table<TakeLog, number>;
+  manifestBatches!: Table<ManifestBatch, number>;
+  planItems!: Table<PlanItem, number>;
 
   constructor() {
     super(DB_NAME);
@@ -72,6 +78,33 @@ export class StopMotionDb extends Dexie {
           const percent = Math.min(100, Math.round((take.takenFrames / total) * 100));
           await tx.table('takes').update(take.id, { percent });
         }
+      });
+    this.version(4)
+      .stores({
+        shots: '++id, code, status, sceneName',
+        frames: '++id, shotId, frameNo, [shotId+frameNo]',
+        props: '++id, shotId, name, [shotId+fromFrame]',
+        // reviewStatus 加入 takes 索引，便于待复核视图过滤
+        takes: '++id, shotId, date, shotCode, reviewStatus',
+        // batchKey 唯一索引（&）：同一份清单重复提交第二次直接被拦，同一批张数不算两遍
+        manifestBatches: '++id, &batchKey, createdAt',
+        planItems: '++id, batchId, shotId, status, shotCodeKey, [batchId+shotCodeKey], reviewed',
+      })
+      .upgrade(async (tx) => {
+        // v4：旧实拍数据先按未对账归入待复核，确认后才并入完成度。
+        // 已有进度快照同步清零，避免总览页在复核前继续把旧账算成已完成。
+        await tx
+          .table('takes')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.reviewStatus !== 'confirmed') row.reviewStatus = 'pending';
+          });
+        await tx
+          .table('shots')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            if (row.progressPercent !== undefined) row.progressPercent = 0;
+          });
       });
   }
 }

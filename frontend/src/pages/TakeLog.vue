@@ -1,12 +1,14 @@
 <script setup lang="ts">
 /**
  * 实拍记录：登记当日实拍张数与废帧数，自动回写镜头完成百分比并提示剩余张数。
+ * 旧数据升级产生的待复核记录在此确认后才并入完成度。
  * 消费 TakeLog、Shot；复用 ShotProgress 与 useProgress。
  */
 import { computed, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useShotStore } from '../stores/shotStore';
 import { useProgress } from '../hooks/useProgress';
+import * as api from '../db/api';
 import { formatDateTime, today } from '../utils/format';
 import ShotProgress from '../components/common/ShotProgress.vue';
 import StatusTag from '../components/common/StatusTag.vue';
@@ -23,6 +25,7 @@ const feedback = ref('');
 
 const selectedShot = computed(() => (selectedShotId.value === null ? undefined : shotStore.byId(selectedShotId.value)));
 const selectedSummary = computed(() => summaries.value.find((s) => s.shotId === selectedShotId.value));
+const pendingRows = computed(() => takes.value.filter((t) => t.reviewStatus === 'pending'));
 
 onMounted(async () => {
   if (!shotStore.ready) await shotStore.load();
@@ -56,14 +59,28 @@ async function submit() {
   }
   await registerTake(shot, form.value.date, taken, wasted);
   await loadTakes();
-  flash(`${shot.code} 已登记 ${taken} 张，完成度回写为 ${selectedSummary.value?.percent ?? 0}%`);
+  flash(`${shot.code} 已登记 ${taken} 张，完成度按实际重算为 ${selectedSummary.value?.percent ?? 0}%`);
+}
+
+async function confirmRow(row: TakeLog) {
+  if (typeof row.id !== 'number') return;
+  await api.setTakeReviewStatus([row.id], 'confirmed');
+  await loadTakes();
+  flash('该条记录已确认并计入完成度');
+}
+
+async function confirmAllPending() {
+  const ids = pendingRows.value.map((r) => r.id ?? 0).filter(Boolean);
+  await api.setTakeReviewStatus(ids, 'confirmed');
+  await loadTakes();
+  flash(`已确认 ${ids.length} 条待复核记录，各镜头完成度按实际重算`);
 }
 
 async function removeRow(row: TakeLog) {
   if (typeof row.id !== 'number') return;
   await removeTake(row.id);
   await loadTakes();
-  flash('已删除该条实拍记录');
+  flash('已删除该条实拍记录，完成度按实际重算');
 }
 </script>
 
@@ -82,6 +99,14 @@ async function removeRow(row: TakeLog) {
     </header>
 
     <p v-if="feedback" class="feedback" data-testid="take-feedback">{{ feedback }}</p>
+
+    <div v-if="pendingRows.length" class="panel pending-banner" data-testid="take-pending-banner">
+      <div>
+        <strong>{{ pendingRows.length }} 条实拍记录待复核</strong>
+        <p class="muted">旧数据升级后先按未对账处理，确认前不计入完成度，避免默认算成拍完。</p>
+      </div>
+      <button type="button" class="btn primary" data-testid="take-confirm-all" @click="confirmAllPending">全部确认并重算</button>
+    </div>
 
     <EmptyState v-if="!shots.length" title="还没有镜头" description="请先到「新建镜头」创建镜头，再登记实拍张数。" />
 
@@ -145,18 +170,25 @@ async function removeRow(row: TakeLog) {
         <div class="panel-head"><h2>实拍记录清单</h2><span class="muted">共 {{ takes.length }} 条</span></div>
         <table v-if="takes.length" class="table" data-testid="take-table">
           <thead>
-            <tr><th>拍摄日期</th><th>镜号</th><th>实拍张数</th><th>废帧数</th><th>剩余张数</th><th>完成百分比</th><th>登记时间</th><th>操作</th></tr>
+            <tr><th>拍摄日期</th><th>镜号</th><th>实拍张数</th><th>废帧数</th><th>剩余张数</th><th>完成百分比</th><th>复核</th><th>登记时间</th><th>操作</th></tr>
           </thead>
           <tbody>
-            <tr v-for="row in takes" :key="row.id">
+            <tr v-for="row in takes" :key="row.id" :class="{ pending: row.reviewStatus === 'pending' }">
               <td class="mono">{{ row.date }}</td>
               <td class="mono">{{ row.shotCode }}</td>
               <td>{{ row.takenFrames }}</td>
               <td>{{ row.wastedFrames }}</td>
               <td>{{ row.remainingFrames }}</td>
-              <td>{{ row.percent }}%</td>
+              <td>{{ row.reviewStatus === 'confirmed' ? `${row.percent}%` : '—' }}</td>
+              <td>
+                <span v-if="row.reviewStatus === 'confirmed'" class="badge green">已确认</span>
+                <span v-else class="badge gray">待复核</span>
+              </td>
               <td class="muted">{{ formatDateTime(row.updatedAt) }}</td>
-              <td><button type="button" class="btn tiny danger" @click="removeRow(row)">删除</button></td>
+              <td class="op-cell">
+                <button v-if="row.reviewStatus === 'pending'" type="button" class="btn tiny primary" data-testid="take-confirm-row" @click="confirmRow(row)">确认</button>
+                <button type="button" class="btn tiny danger" @click="removeRow(row)">删除</button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -339,5 +371,36 @@ h1 {
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 13px;
+}
+.pending-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: #fff8ec;
+  border-color: #f0d9a8;
+}
+.pending-banner p {
+  margin: 4px 0 0;
+}
+tr.pending {
+  background: #fffbf2;
+}
+.op-cell {
+  white-space: nowrap;
+}
+.badge {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 1px 9px;
+  font-size: 11px;
+}
+.badge.green {
+  background: #e6f5ec;
+  color: #2e8b57;
+}
+.badge.gray {
+  background: #eef1f6;
+  color: #6b7686;
 }
 </style>

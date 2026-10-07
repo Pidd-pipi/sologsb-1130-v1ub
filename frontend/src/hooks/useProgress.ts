@@ -38,7 +38,8 @@ export function useProgress() {
   const summaries = computed<ShotProgressSummary[]>(() =>
     shotStore.shots.map((shot) => {
       const planned = durationToFrames(shot.durationSec, shot.fps);
-      const rows = takes.value.filter((t) => t.shotId === shot.id);
+      // 待复核（含旧数据升级）的实拍记录确认前不并入完成度，不默认算成拍完
+      const rows = takes.value.filter((t) => t.shotId === shot.id && t.reviewStatus === 'confirmed');
       const taken = rows.reduce((sum, r) => sum + (r.takenFrames || 0), 0);
       const wasted = rows.reduce((sum, r) => sum + (r.wastedFrames || 0), 0);
       const p = computeProgress(planned, taken, wasted);
@@ -64,6 +65,7 @@ export function useProgress() {
       { label: '6 张以上', count: 0 },
     ];
     for (const row of takes.value) {
+      if (row.reviewStatus !== 'confirmed') continue;
       const n = row.wastedFrames || 0;
       if (n === 0) buckets[0].count += 1;
       else if (n <= 2) buckets[1].count += 1;
@@ -84,7 +86,7 @@ export function useProgress() {
 
   function emptyTake(shot: Shot): TakeLog {
     const planned = durationToFrames(shot.durationSec, shot.fps);
-    const rows = takes.value.filter((t) => t.shotId === shot.id);
+    const rows = takes.value.filter((t) => t.shotId === shot.id && t.reviewStatus === 'confirmed');
     const taken = rows.reduce((sum, r) => sum + (r.takenFrames || 0), 0);
     const wasted = rows.reduce((sum, r) => sum + (r.wastedFrames || 0), 0);
     const p = computeProgress(planned, taken, wasted);
@@ -94,7 +96,7 @@ export function useProgress() {
   /** 登记一条实拍记录，并回写镜头完成百分比 */
   async function registerTake(shot: Shot, date: string, takenFrames: number, wastedFrames: number) {
     const planned = durationToFrames(shot.durationSec, shot.fps);
-    const rows = takes.value.filter((t) => t.shotId === shot.id);
+    const rows = takes.value.filter((t) => t.shotId === shot.id && t.reviewStatus === 'confirmed');
     const prevTaken = rows.reduce((sum, r) => sum + (r.takenFrames || 0), 0);
     const prevWasted = rows.reduce((sum, r) => sum + (r.wastedFrames || 0), 0);
     const p = computeProgress(planned, prevTaken + takenFrames, prevWasted + wastedFrames);
@@ -106,17 +108,20 @@ export function useProgress() {
       wastedFrames,
       remainingFrames: p.remaining,
       percent: p.percent,
+      reviewStatus: 'confirmed',
       updatedAt: Date.now(),
     };
     const id = await api.addTake(row);
+    // addTake 已在数据层按实际重算镜头进度；回读快照保持页面一致
     takes.value = [{ ...row, id }, ...takes.value];
-    if (typeof shot.id === 'number') await shotStore.syncProgress(shot.id, p.percent);
+    await shotStore.load();
     return { ...row, id };
   }
 
   async function removeTake(id: number) {
     await api.deleteTake(id);
     takes.value = takes.value.filter((t) => t.id !== id);
+    await shotStore.load();
   }
 
   return {

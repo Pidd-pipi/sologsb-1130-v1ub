@@ -4,6 +4,8 @@
  *   v1 建 shots / frames
  *   v2 增加 props 表与 shotId 索引
  *   v3 增加 takes 表，并按实拍张数回填进度
+ *   v4 增加 planEntries（外部排片清单）表；takes 增加对账状态与幂等键。
+ *      旧实拍记录先归入「待复核」，镜头完成度清零，确认后再并入。
  */
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
@@ -11,6 +13,7 @@ import type { Shot } from '../types/shot';
 import type { FrameEntry } from '../types/frame';
 import type { PropState } from '../types/prop';
 import type { TakeLog } from '../types/take';
+import type { PlanEntry } from '../types/plan';
 
 export const DB_NAME = 'gbstopmotion-db';
 
@@ -32,6 +35,7 @@ export class StopMotionDb extends Dexie {
   frames!: Table<FrameEntry, number>;
   props!: Table<PropState, number>;
   takes!: Table<TakeLog, number>;
+  planEntries!: Table<PlanEntry, number>;
 
   constructor() {
     super(DB_NAME);
@@ -72,6 +76,32 @@ export class StopMotionDb extends Dexie {
           const percent = Math.min(100, Math.round((take.takenFrames / total) * 100));
           await tx.table('takes').update(take.id, { percent });
         }
+      });
+    this.version(4)
+      .stores({
+        shots: '++id, code, status, sceneName',
+        frames: '++id, shotId, frameNo, [shotId+frameNo]',
+        props: '++id, shotId, name, [shotId+fromFrame]',
+        // &dedupKey 唯一业务键（批次|镜号|日期），并发/重复提交同一份清单时数据库层兜底去重
+        takes: '++id, shotId, date, shotCode, reconStatus, &dedupKey, matchedPlanId',
+        planEntries:
+          '++id, batchId, shotCode, date, reconStatus, &dedupKey, [shotCode+date], matchedTakeId',
+      })
+      .upgrade(async (tx) => {
+        // v4：旧实拍记录未经对账，一律归入待复核；完成度清零，确认后才并入
+        await tx
+          .table('takes')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            row.reconStatus = '待复核';
+            row.matchedPlanId = undefined;
+          });
+        await tx
+          .table('shots')
+          .toCollection()
+          .modify((row: Record<string, unknown>) => {
+            row.progressPercent = 0;
+          });
       });
   }
 }

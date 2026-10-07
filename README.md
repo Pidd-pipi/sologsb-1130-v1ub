@@ -17,6 +17,15 @@ docker compose up -d --build
 docker compose down
 ```
 
+## 对账逻辑自检
+
+```bash
+cd frontend && npm install && npm run verify
+```
+
+`scripts/verify-core.ts`（纯函数：四分类、旧数据待复核、清单解析、内容指纹）与
+`scripts/verify-db.ts`（fake-indexeddb：同批并发双提交只入账一次、更正单替换、待复核确认后重算）。
+
 ## 技术栈
 
 | 层 | 选型 |
@@ -40,14 +49,15 @@ sologsb-1130/
     ├── nginx.conf            # try_files $uri $uri/ /index.html + gzip
     ├── public/favicon.svg
     └── src/
-        ├── types/{shot,frame,prop,take}.ts        # 4 个数据模型
+        ├── types/{shot,frame,prop,take,plan}.ts        # 5 个数据模型（plan 为外部排片清单）
         ├── stores/{shotStore,frameStore,uiStore}.ts
         ├── components/common/{FrameStrip,ExposureForm,ShotProgress,StatusTag,EmptyState}.vue
-        ├── hooks/{useFrameSequence,useProgress,useLocalDraft}.ts
-        ├── pages/{Overview,ShotNew,ShotDetail,FrameBoard,PropTrack,TakeLog}.vue
+        ├── hooks/{useFrameSequence,useProgress,useLocalDraft,useReconcile}.ts
+        ├── pages/{Overview,ShotNew,ShotDetail,FrameBoard,PropTrack,TakeLog,Reconcile}.vue
         ├── router/index.ts
-        ├── utils/{frameMath,exposure,format}.ts
-        └── db/{index,api}.ts                      # Dexie 实例（v1→v3 升级迁移）与读写层
+        ├── utils/{frameMath,exposure,format,reconcile,planParse}.ts
+        ├── services/progress.ts                       # 已核实张数重算完成度/剩余
+        └── db/{index,api}.ts                          # Dexie 实例（v1→v4 升级迁移）与读写层
 ```
 
 ## 页面与路由
@@ -60,10 +70,13 @@ sologsb-1130/
 | `/frames` | 帧序编排台 | 移动/插入/删除帧、批量套用曝光，改动后重算序号与总时长 |
 | `/props` | 道具位移轨迹 | 按镜头与帧区间登记 X/Y/Z 与旋转角度，曲线预览累计位移 |
 | `/progress` | 实拍记录 | 登记当日实拍张数与废帧数，回写完成百分比并提示剩余张数 |
+| `/reconcile` | 清单对账 | 导入外部排片清单（CSV/TSV），按镜号对账：对上/张数不符/日期不符/清单独有分列 |
 
 ## 数据存储
 
-- **IndexedDB（Dexie，`gbstopmotion-db`）**：镜头、帧条目、道具状态、实拍记录四张表。
-  版本迁移：`v1` 建 `shots` / `frames`；`v2` 增加 `props` 表与 `shotId` 索引；`v3` 增加 `takes` 表并按实拍张数回填进度。
+- **IndexedDB（Dexie，`gbstopmotion-db`）**：镜头、帧条目、道具状态、实拍记录、排片清单五张表。
+  版本迁移：`v1` 建 `shots` / `frames`；`v2` 增加 `props` 表与 `shotId` 索引；`v3` 增加 `takes` 表并按实拍张数回填进度；`v4` 增加 `planEntries` 表、`takes` 增加对账状态与唯一幂等键，旧实拍记录一律置为「待复核」、镜头完成度清零，人工确认后才并入。
+- **清单对账规则**：按规范镜号（忽略大小写/空白）+ 日期匹配；张数/日期不一致与「清单有本机无」分四类列出，不默认算拍完；只有 已对上/张数不符（按实际）/本机独有/未对账/已确认 的记录计入完成度，待复核与日期不符须先处理。
+- **导入幂等**：批次号由清单内容指纹（FNV-1a）派生，配合 `dedupKey` 唯一索引与事务冲突重试；同一份清单重复或几乎同时提交，同一批（镜号+日期）张数只入账一次。
 - **localStorage**：新建镜头表单与批量曝光参数草稿，键前缀 `gbstopmotion:draft:`。
 - 全部数据存在浏览器本地，容器无状态、不使用数据库服务、不挂载命名卷，无任何后端接口调用。

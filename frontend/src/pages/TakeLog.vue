@@ -5,6 +5,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { storeToRefs } from 'pinia';
+import { useRouter } from 'vue-router';
 import { useShotStore } from '../stores/shotStore';
 import { useProgress } from '../hooks/useProgress';
 import { formatDateTime, today } from '../utils/format';
@@ -13,6 +14,7 @@ import StatusTag from '../components/common/StatusTag.vue';
 import EmptyState from '../components/common/EmptyState.vue';
 import type { TakeLog } from '../types/take';
 
+const router = useRouter();
 const shotStore = useShotStore();
 const { shots } = storeToRefs(shotStore);
 const { takes, summaries, overall, wasteBuckets, loadTakes, registerTake, removeTake, loading } = useProgress();
@@ -23,6 +25,16 @@ const feedback = ref('');
 
 const selectedShot = computed(() => (selectedShotId.value === null ? undefined : shotStore.byId(selectedShotId.value)));
 const selectedSummary = computed(() => summaries.value.find((s) => s.shotId === selectedShotId.value));
+const pendingCount = computed(() => takes.value.filter((t) => t.reconStatus === '待复核').length);
+const dateMismatchCount = computed(() => takes.value.filter((t) => t.reconStatus === '日期不符').length);
+
+function reconClass(status: TakeLog['reconStatus']): string {
+  if (status === '已对上' || status === '已确认') return 'recon-ok';
+  if (status === '待复核') return 'recon-pending';
+  if (status === '张数不符' || status === '日期不符') return 'recon-warn';
+  if (status === '本机独有') return 'recon-info';
+  return 'recon-idle';
+}
 
 onMounted(async () => {
   if (!shotStore.ready) await shotStore.load();
@@ -82,6 +94,11 @@ async function removeRow(row: TakeLog) {
     </header>
 
     <p v-if="feedback" class="feedback" data-testid="take-feedback">{{ feedback }}</p>
+
+    <p v-if="pendingCount + dateMismatchCount > 0" class="notice" data-testid="take-notice">
+      有 {{ pendingCount }} 条旧实拍记录待复核、{{ dateMismatchCount }} 条日期不符，均未计入完成度。
+      <router-link to="/reconcile">去清单对账处理 →</router-link>
+    </p>
 
     <EmptyState v-if="!shots.length" title="还没有镜头" description="请先到「新建镜头」创建镜头，再登记实拍张数。" />
 
@@ -145,7 +162,7 @@ async function removeRow(row: TakeLog) {
         <div class="panel-head"><h2>实拍记录清单</h2><span class="muted">共 {{ takes.length }} 条</span></div>
         <table v-if="takes.length" class="table" data-testid="take-table">
           <thead>
-            <tr><th>拍摄日期</th><th>镜号</th><th>实拍张数</th><th>废帧数</th><th>剩余张数</th><th>完成百分比</th><th>登记时间</th><th>操作</th></tr>
+            <tr><th>拍摄日期</th><th>镜号</th><th>实拍张数</th><th>废帧数</th><th>剩余张数</th><th>完成百分比</th><th>对账</th><th>登记时间</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="row in takes" :key="row.id">
@@ -155,6 +172,7 @@ async function removeRow(row: TakeLog) {
               <td>{{ row.wastedFrames }}</td>
               <td>{{ row.remainingFrames }}</td>
               <td>{{ row.percent }}%</td>
+              <td><span class="recon-badge" :class="reconClass(row.reconStatus)">{{ row.reconStatus }}</span></td>
               <td class="muted">{{ formatDateTime(row.updatedAt) }}</td>
               <td><button type="button" class="btn tiny danger" @click="removeRow(row)">删除</button></td>
             </tr>
@@ -339,5 +357,46 @@ h1 {
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 13px;
+}
+.notice {
+  margin: 0;
+  background: #fffaef;
+  border: 1px solid #f0d9a8;
+  color: #8a5a12;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.notice a {
+  color: #2f6fed;
+  text-decoration: none;
+  font-weight: 600;
+}
+.recon-badge {
+  display: inline-block;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.recon-ok {
+  background: #e3f5ec;
+  color: #2b8a5f;
+}
+.recon-pending {
+  background: #f7e3b8;
+  color: #8a5a12;
+}
+.recon-warn {
+  background: #fdebe2;
+  color: #b95a2b;
+}
+.recon-info {
+  background: #e7f0ff;
+  color: #2f6fed;
+}
+.recon-idle {
+  background: #eef1f6;
+  color: #6b7686;
 }
 </style>

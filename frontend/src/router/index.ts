@@ -1,4 +1,4 @@
-/** 路由表：6 个核心页面，均对应提示词中的路径 */
+/** 路由表：核心页面，均对应提示词中的路径 */
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
 import Overview from '../pages/Overview.vue';
 import ShotNew from '../pages/ShotNew.vue';
@@ -6,6 +6,7 @@ import ShotDetail from '../pages/ShotDetail.vue';
 import FrameBoard from '../pages/FrameBoard.vue';
 import PropTrack from '../pages/PropTrack.vue';
 import TakeLog from '../pages/TakeLog.vue';
+import Reconcile from '../pages/Reconcile.vue';
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'overview', component: Overview, meta: { title: '进度总览' } },
@@ -14,6 +15,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/frames', name: 'frames', component: FrameBoard, meta: { title: '帧序编排台' } },
   { path: '/props', name: 'props', component: PropTrack, meta: { title: '道具位移轨迹' } },
   { path: '/progress', name: 'progress', component: TakeLog, meta: { title: '实拍记录' } },
+  { path: '/reconcile', name: 'reconcile', component: Reconcile, meta: { title: '排片清单对账' } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
 
@@ -23,6 +25,7 @@ export const navItems: { path: string; label: string }[] = [
   { path: '/frames', label: '帧序编排台' },
   { path: '/props', label: '道具位移轨迹' },
   { path: '/progress', label: '实拍记录' },
+  { path: '/reconcile', label: '清单对账' },
 ];
 
 const router = createRouter({
